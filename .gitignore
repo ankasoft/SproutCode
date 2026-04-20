@@ -1,0 +1,22 @@
+# Local
+local.properties
+PLAN.md
+
+# Build outputs
+*.iml
+.gradle/
+build/
+app/build/
+captures/
+.externalNativeBuild/
+.cxx/
+
+# IDE
+.idea/
+*.iws
+*.ipr
+out/
+
+# Misc
+.DS_Store
+*.log

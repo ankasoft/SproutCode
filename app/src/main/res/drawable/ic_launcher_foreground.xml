@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- Thick white stem -->
+    <path
+        android:pathData="M 54 56 L 54 92"
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="10"
+        android:strokeLineCap="round" />
+
+    <!-- Left leaf: big bold teardrop -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M 54 60 C 22 56 16 30 30 14 C 50 22 58 44 54 60 Z" />
+
+    <!-- Right leaf: mirror -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M 54 60 C 86 56 92 30 78 14 C 58 22 50 44 54 60 Z" />
+</vector>

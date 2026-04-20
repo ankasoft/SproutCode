@@ -1,0 +1,7 @@
+-keep class com.jcraft.jsch.** { *; }
+-dontwarn com.jcraft.jsch.**
+-keep class com.termux.terminal.** { *; }
+-keep class com.termux.view.** { *; }
+-dontwarn com.termux.**
+-dontwarn org.bouncycastle.**
+-dontwarn org.ietf.jgss.**
