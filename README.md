@@ -1,6 +1,7 @@
 # SproutCode
 
-An Android SSH terminal with Hetzner Cloud provisioning — built for developers who want full control of remote infrastructure from their phone.
+**Run AI coding agents from your phone.**
+Spin up a Linux server on Hetzner, clone your repo, and hand it off to Claude Code, Opencode, or Kilo Code — all without touching a laptop.
 
 ## The Use Case: Agentic Coding on Demand
 
