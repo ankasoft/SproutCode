@@ -1,6 +1,17 @@
 # SproutCode
 
-An Android SSH terminal client with Hetzner Cloud provisioning. Connect to remote servers, spin up new VMs, and manage your infrastructure — all from your phone.
+An Android SSH terminal with Hetzner Cloud provisioning — built for developers who want full control of remote infrastructure from their phone.
+
+## The Use Case: Agentic Coding on Demand
+
+Tools like **Claude Code**, **Opencode**, and **Kilo Code** run best on a real Linux server with a full environment. SproutCode lets you spin that up and tear it down in minutes — entirely from your phone:
+
+1. **Create a server** on Hetzner Cloud with one tap — SSH key injected automatically
+2. **Clone your repo** at boot time — provide a GitHub URL and it's ready when the terminal opens
+3. **Open the terminal** — run your AI coding agent directly over SSH
+4. **Delete the server** when done — no ongoing cost, no leftover VM
+
+No laptop needed. No pre-provisioned VM sitting idle. Just a clean server when you need it, gone when you don't.
 
 ## Features
 
@@ -16,20 +27,20 @@ An Android SSH terminal client with Hetzner Cloud provisioning. Connect to remot
 - Persistent encrypted storage for all server credentials
 
 ### Hetzner Cloud Integration
-- Create servers directly from the app — SSH key injected automatically
-- Browse live locations, server types, and OS images from the API
+- Create servers directly from the app — app's SSH key injected automatically
+- Browse live locations, server types, and OS images from the Hetzner API
 - Monitor server initialization and wait for SSH readiness before opening terminal
 - Delete servers from Hetzner Cloud directly from the server list
-- Optional: auto-clone a GitHub repository on first boot via `user_data` (cloud-init)
+- Auto-clone a GitHub repository on first boot via `user_data` (cloud-init)
 
 ### SSH Key Management
 - RSA 4096 key pair auto-generated on first launch
 - Private key stored encrypted on device only
 - Public key copyable for manual server configuration
-- Key regeneration with confirmation
+- Key regeneration with confirmation dialog
 
 ### Settings
-- Hetzner API token and default server preferences
+- Hetzner API token and default server preferences (location, type, image)
 - GitHub Personal Access Token for private repo cloning
 - Light / dark theme toggle
 - All sensitive data stored in Android `EncryptedSharedPreferences`
@@ -44,6 +55,17 @@ An Android SSH terminal client with Hetzner Cloud provisioning. Connect to remot
 | Crypto storage | AndroidX Security EncryptedSharedPreferences |
 | HTTP | `HttpURLConnection` (no extra deps) |
 | Async | Kotlin Coroutines + StateFlow |
+
+## Privacy
+
+SproutCode collects no data whatsoever. Everything stays on your device:
+
+- SSH credentials and server list are stored in Android `EncryptedSharedPreferences` — never leave the device
+- Your SSH private key is generated locally and never transmitted anywhere
+- Hetzner and GitHub tokens are stored encrypted on-device only
+- There are no analytics, no crash reporting, no telemetry, no backend
+
+The only outbound connections are the ones you initiate: SSH to your servers and Hetzner Cloud API calls on your behalf.
 
 ## Requirements
 
