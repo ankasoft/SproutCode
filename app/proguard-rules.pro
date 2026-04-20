@@ -5,3 +5,6 @@
 -dontwarn com.termux.**
 -dontwarn org.bouncycastle.**
 -dontwarn org.ietf.jgss.**
+-dontwarn com.google.errorprone.annotations.**
+-dontwarn javax.annotation.concurrent.**
+-dontwarn com.google.crypto.tink.**
