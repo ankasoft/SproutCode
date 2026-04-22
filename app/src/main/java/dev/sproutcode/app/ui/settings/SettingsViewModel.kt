@@ -7,9 +7,12 @@ import android.content.Context
 import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import dev.sproutcode.app.data.AppPrefs
 import dev.sproutcode.app.data.HetznerConfig
 import dev.sproutcode.app.data.HetznerConfigStore
 import dev.sproutcode.app.data.SshKeyStore
+import dev.sproutcode.app.data.TerminalFont
+import dev.sproutcode.app.data.TerminalTheme
 import dev.sproutcode.app.hetzner.HetznerClient
 import dev.sproutcode.app.hetzner.HetznerImage
 import dev.sproutcode.app.hetzner.HetznerLocation
@@ -37,9 +40,13 @@ class SettingsViewModel(app: Application) : AndroidViewModel(app) {
 
     private val store       = HetznerConfigStore(app)
     private val sshKeyStore = SshKeyStore(app)
+    private val appPrefs    = AppPrefs.getInstance(app)
 
     private val _uiState = MutableStateFlow(SettingsUiState())
     val uiState: StateFlow<SettingsUiState> = _uiState
+
+    val terminalTheme: StateFlow<TerminalTheme> = appPrefs.terminalTheme
+    val terminalFont: StateFlow<TerminalFont> = appPrefs.terminalFont
 
     init {
         viewModelScope.launch {
@@ -85,6 +92,14 @@ class SettingsViewModel(app: Application) : AndroidViewModel(app) {
             }
             _uiState.value = _uiState.value.copy(sshPublicKey = newKey)
         }
+    }
+
+    fun setTerminalTheme(theme: TerminalTheme) {
+        appPrefs.setTerminalTheme(theme)
+    }
+
+    fun setTerminalFont(font: TerminalFont) {
+        appPrefs.setTerminalFont(font)
     }
 
     fun fetchHetznerOptions() {

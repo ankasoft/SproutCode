@@ -1,6 +1,7 @@
 package dev.sproutcode.app.ui.servercreate
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -15,6 +16,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
@@ -30,6 +32,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -38,9 +41,11 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import dev.sproutcode.app.notification.NotificationHelper
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -50,9 +55,32 @@ fun ServerCreateScreen(
     vm: ServerCreateViewModel = viewModel()
 ) {
     val state by vm.uiState.collectAsStateWithLifecycle()
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val lifecycleOwner = LocalLifecycleOwner.current
+
+    // Ekran her açıldığında ViewModel state'ini sıfırla
+    LaunchedEffect(Unit) {
+        vm.resetState()
+    }
+
+    DisposableEffect(lifecycleOwner) {
+        vm.observeWorkProgress(lifecycleOwner)
+        onDispose {
+            vm.removeWorkObserver()
+        }
+    }
 
     LaunchedEffect(state.createdServerId) {
-        state.createdServerId?.let { onCreated(it) }
+        state.createdServerId?.let { 
+            android.util.Log.d("ServerCreateScreen", "Navigating to terminal with serverId=$it")
+            onCreated(it)
+            vm.resetCreatedServerId()
+        }
+    }
+
+    // Debug: Ekran açıldığını logla
+    LaunchedEffect(Unit) {
+        android.util.Log.e("ServerCreateScreen", "Screen opened! tokenMissing=${state.tokenMissing}, createdServerId=${state.createdServerId}")
     }
 
     Scaffold(
@@ -143,7 +171,16 @@ fun ServerCreateScreen(
                     Spacer(Modifier.height(8.dp))
 
                     Button(
-                        onClick  = { vm.create() },
+                        onClick  = {
+                            vm.create { title, message, serverId ->
+                                NotificationHelper.showServerCreationNotification(
+                                    context,
+                                    title,
+                                    message,
+                                    serverId
+                                )
+                            }
+                        },
                         enabled  = !state.isCreating && !state.isLoadingOptions
                                    && state.location.isNotBlank()
                                    && state.serverType.isNotBlank()
@@ -175,15 +212,16 @@ private fun DropdownField(
     var expanded by remember { mutableStateOf(false) }
     ExposedDropdownMenuBox(
         expanded         = expanded,
-        onExpandedChange = { if (options.isNotEmpty() && enabled) expanded = !expanded }
+        onExpandedChange = { if (enabled && options.isNotEmpty()) expanded = !expanded }
     ) {
         OutlinedTextField(
             value         = value,
-            onValueChange = onValueChange,
+            onValueChange = {},
+            readOnly      = true,
             label         = { Text(label) },
             placeholder   = { Text(placeholder) },
             singleLine    = true,
-            enabled       = enabled,
+            enabled       = enabled && options.isNotEmpty(),
             modifier      = Modifier.menuAnchor().fillMaxWidth(),
             trailingIcon  = {
                 if (options.isNotEmpty()) {

@@ -14,6 +14,12 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
+data class ServerStatus(
+    val serverId: String,
+    val isOnline: Boolean,
+    val isChecking: Boolean = false
+)
+
 class ServerListViewModel(app: Application) : AndroidViewModel(app) {
 
     private val store        = ServerStore(app)
@@ -22,6 +28,9 @@ class ServerListViewModel(app: Application) : AndroidViewModel(app) {
 
     private val _servers     = MutableStateFlow<List<Server>>(emptyList())
     val servers: StateFlow<List<Server>> = _servers
+
+    private val _serverStatuses = MutableStateFlow<Map<String, ServerStatus>>(emptyMap())
+    val serverStatuses: StateFlow<Map<String, ServerStatus>> = _serverStatuses
 
     private val _deleteError = MutableStateFlow<String?>(null)
     val deleteError: StateFlow<String?> = _deleteError
@@ -33,6 +42,39 @@ class ServerListViewModel(app: Application) : AndroidViewModel(app) {
     fun refresh() {
         viewModelScope.launch {
             _servers.value = withContext(Dispatchers.IO) { store.list() }
+            checkAllServerStatuses()
+        }
+    }
+
+    fun checkAllServerStatuses() {
+        viewModelScope.launch {
+            val serverList = _servers.value
+            serverList.forEach { server ->
+                _serverStatuses.value = _serverStatuses.value + (server.id to ServerStatus(
+                    serverId = server.id,
+                    isOnline = false,
+                    isChecking = true
+                ))
+                val isOnline = withContext(Dispatchers.IO) {
+                    checkServerOnline(server.host, server.port)
+                }
+                _serverStatuses.value = _serverStatuses.value + (server.id to ServerStatus(
+                    serverId = server.id,
+                    isOnline = isOnline,
+                    isChecking = false
+                ))
+            }
+        }
+    }
+
+    private fun checkServerOnline(host: String, port: Int): Boolean {
+        return try {
+            java.net.Socket().use { socket ->
+                socket.connect(java.net.InetSocketAddress(host, port), 3000)
+                true
+            }
+        } catch (e: Exception) {
+            false
         }
     }
 

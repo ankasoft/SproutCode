@@ -48,6 +48,8 @@ import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import dev.sproutcode.app.data.TerminalFont
+import dev.sproutcode.app.data.TerminalTheme
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -56,6 +58,8 @@ fun SettingsScreen(
     vm: SettingsViewModel = viewModel()
 ) {
     val state by vm.uiState.collectAsStateWithLifecycle()
+    val terminalTheme by vm.terminalTheme.collectAsStateWithLifecycle()
+    val terminalFont by vm.terminalFont.collectAsStateWithLifecycle()
     var showToken by remember { mutableStateOf(false) }
 
     Scaffold(
@@ -252,6 +256,40 @@ fun SettingsScreen(
                         )
                     }
                 }
+            )
+
+            Spacer(Modifier.height(12.dp))
+            SectionHeader("Terminal Theme")
+            DropdownField(
+                label         = "Terminal Theme",
+                value         = terminalTheme.name.replace("_", " ").lowercase().replaceFirstChar { it.uppercase() },
+                onValueChange = { themeName ->
+                    TerminalTheme.values().firstOrNull {
+                        it.name.replace("_", " ").lowercase() == themeName.lowercase()
+                    }?.let { vm.setTerminalTheme(it) }
+                },
+                options       = TerminalTheme.values().map {
+                    it.name.replace("_", " ").lowercase().replaceFirstChar { c -> c.uppercase() } to
+                    it.name.replace("_", " ").lowercase().replaceFirstChar { c -> c.uppercase() }
+                },
+                placeholder   = "Select terminal theme"
+            )
+
+            Spacer(Modifier.height(12.dp))
+            SectionHeader("Terminal Font")
+            DropdownField(
+                label         = "Terminal Font",
+                value         = terminalFont.name.replace("_", " ").lowercase().replaceFirstChar { it.uppercase() },
+                onValueChange = { fontName ->
+                    TerminalFont.values().firstOrNull {
+                        it.name.replace("_", " ").lowercase() == fontName.lowercase()
+                    }?.let { vm.setTerminalFont(it) }
+                },
+                options       = TerminalFont.values().map {
+                    it.name.replace("_", " ").lowercase().replaceFirstChar { c -> c.uppercase() } to
+                    it.name.replace("_", " ").lowercase().replaceFirstChar { c -> c.uppercase() }
+                },
+                placeholder   = "Select terminal font"
             )
 
             Spacer(Modifier.height(8.dp))

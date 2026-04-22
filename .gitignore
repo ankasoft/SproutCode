@@ -1,6 +1,7 @@
 # Local
 local.properties
 PLAN.md
+.claude/
 
 # Build outputs
 *.iml

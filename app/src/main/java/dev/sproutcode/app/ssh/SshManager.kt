@@ -1,6 +1,7 @@
 package dev.sproutcode.app.ssh
 
 import android.content.Context
+import dev.sproutcode.app.data.KnownHostsStore
 import dev.sproutcode.app.data.Server
 import dev.sproutcode.app.data.SshKeyStore
 import com.jcraft.jsch.ChannelShell
@@ -10,18 +11,60 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.InputStream
 import java.io.OutputStream
+import java.security.MessageDigest
 
 data class SshStreams(
     val input: InputStream,
     val output: OutputStream
 )
 
+sealed class HostKeyVerificationResult {
+    data class Trusted(val fingerprint: String) : HostKeyVerificationResult()
+    data class NewHost(val fingerprint: String) : HostKeyVerificationResult()
+    data class Changed(val expected: String, val actual: String) : HostKeyVerificationResult()
+}
+
 class SshManager(context: Context) {
 
     private val sshKeyStore = SshKeyStore(context)
+    private val knownHostsStore = KnownHostsStore(context)
 
     private var session: Session?      = null
     private var channel: ChannelShell? = null
+
+    fun verifyHostKey(host: String, port: Int): HostKeyVerificationResult {
+        val expectedFingerprint = knownHostsStore.getFingerprint(host, port)
+
+        return try {
+            val jsch = JSch()
+            val sess = jsch.getSession("dummy", host, port)
+            sess.setConfig("StrictHostKeyChecking", "no")
+            sess.connect(10_000)
+            val hostKey = sess.hostKey
+            val fingerprint = hostKey?.let { 
+                try {
+                    val md = java.security.MessageDigest.getInstance("SHA-256")
+                    val hash = md.digest(it.key.toByteArray(Charsets.UTF_8))
+                    hash.joinToString("") { b -> String.format("%02x", b) }
+                } catch (e: Exception) {
+                    ""
+                }
+            } ?: ""
+            sess.disconnect()
+
+            when {
+                expectedFingerprint == null -> HostKeyVerificationResult.NewHost(fingerprint)
+                expectedFingerprint == fingerprint -> HostKeyVerificationResult.Trusted(fingerprint)
+                else -> HostKeyVerificationResult.Changed(expectedFingerprint, fingerprint)
+            }
+        } catch (e: Exception) {
+            HostKeyVerificationResult.NewHost("")
+        }
+    }
+
+    fun trustHost(host: String, port: Int, fingerprint: String) {
+        knownHostsStore.saveFingerprint(host, port, fingerprint)
+    }
 
     suspend fun connect(server: Server, columns: Int, rows: Int): SshStreams =
         withContext(Dispatchers.IO) {

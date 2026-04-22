@@ -15,10 +15,12 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.CloudUpload
+import androidx.compose.material.icons.filled.Circle
 import androidx.compose.material.icons.filled.DarkMode
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.LightMode
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ButtonDefaults
@@ -51,6 +53,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import dev.sproutcode.app.data.Server
 import dev.sproutcode.app.data.ThemeMode
+import androidx.compose.ui.graphics.Color
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -65,6 +68,7 @@ fun ServerListScreen(
     val servers     by vm.servers.collectAsStateWithLifecycle()
     val themeMode   by vm.appPrefs.themeMode.collectAsState()
     val deleteError by vm.deleteError.collectAsStateWithLifecycle()
+    val serverStatuses by vm.serverStatuses.collectAsStateWithLifecycle()
 
     LaunchedEffect(Unit) { vm.refresh() }
 
@@ -77,6 +81,9 @@ fun ServerListScreen(
             TopAppBar(
                 title = { Text("SSH Servers") },
                 actions = {
+                    IconButton(onClick = { vm.checkAllServerStatuses() }) {
+                        Icon(Icons.Default.Refresh, contentDescription = "Check status")
+                    }
                     IconButton(onClick = onSettings) {
                         Icon(Icons.Default.Settings, contentDescription = "Settings")
                     }
@@ -114,8 +121,10 @@ fun ServerListScreen(
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 items(servers, key = { it.id }) { server ->
+                    val status = serverStatuses[server.id]
                     ServerRow(
                         server   = server,
+                        status   = status,
                         onClick  = { onConnect(server.id) },
                         onEdit   = { onEdit(server.id) },
                         onDelete = { pendingDelete = server }
@@ -222,6 +231,7 @@ fun ServerListScreen(
 @Composable
 private fun ServerRow(
     server:   Server,
+    status:   ServerStatus?,
     onClick:  () -> Unit,
     onEdit:   () -> Unit,
     onDelete: () -> Unit
@@ -241,6 +251,21 @@ private fun ServerRow(
                 .padding(horizontal = 16.dp, vertical = 12.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
+            // Status indicator
+            if (status != null) {
+                val statusColor = when {
+                    status.isChecking -> MaterialTheme.colorScheme.onSurface.copy(alpha = 0.3f)
+                    status.isOnline -> androidx.compose.ui.graphics.Color(0xFF3FB950)
+                    else -> MaterialTheme.colorScheme.error
+                }
+                Icon(
+                    imageVector = Icons.Default.Circle,
+                    contentDescription = if (status.isOnline) "Online" else "Offline",
+                    tint = statusColor,
+                    modifier = Modifier.padding(end = 12.dp)
+                )
+            }
+
             Column(modifier = Modifier.weight(1f)) {
                 Text(
                     text  = server.name.ifBlank { "${server.username}@${server.host}" },

@@ -4,13 +4,17 @@ import android.app.Application
 import android.content.Context
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import dev.sproutcode.app.data.AppPrefs
+import dev.sproutcode.app.data.Server
 import dev.sproutcode.app.data.ServerStore
+import dev.sproutcode.app.ssh.HostKeyVerificationResult
 import dev.sproutcode.app.ssh.SshManager
 import dev.sproutcode.app.ssh.SshStreams
 import com.termux.terminal.TerminalSession
 import com.termux.view.TerminalView
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.isActive
@@ -22,6 +26,14 @@ sealed class TerminalUiState {
     data object Connected    : TerminalUiState()
     data class  Error(val message: String) : TerminalUiState()
     data object Disconnected : TerminalUiState()
+    data class  VerifyHostKey(
+        val host: String,
+        val port: Int,
+        val fingerprint: String,
+        val isChanged: Boolean,
+        val expectedFingerprint: String? = null
+    ) : TerminalUiState()
+    data object Reconnecting : TerminalUiState()
 }
 
 class TerminalViewModel(app: Application) : AndroidViewModel(app) {
@@ -29,9 +41,13 @@ class TerminalViewModel(app: Application) : AndroidViewModel(app) {
     private val serverStore = ServerStore(app)
     private val sshManager  = SshManager(app)
     private val uiPrefs     = app.getSharedPreferences("ui_prefs", Context.MODE_PRIVATE)
+    private val appPrefs    = AppPrefs.getInstance(app)
 
     private val _uiState = MutableStateFlow<TerminalUiState>(TerminalUiState.Connecting)
     val uiState: StateFlow<TerminalUiState> = _uiState
+
+    val terminalTheme = appPrefs.terminalTheme
+    val terminalFont = appPrefs.terminalFont
 
     private var serverId: String? = null
     private var sshStreams:       SshStreams?      = null
@@ -43,6 +59,86 @@ class TerminalViewModel(app: Application) : AndroidViewModel(app) {
 
     var fontSize: Int = uiPrefs.getInt("font_size", 14)
         private set
+
+    private var reconnectAttempts = 0
+    private val maxReconnectAttempts = 5
+    private var reconnectJob: Job? = null
+
+    private val _searchQuery = MutableStateFlow("")
+    val searchQuery: StateFlow<String> = _searchQuery
+
+    private val _searchResults = MutableStateFlow<List<Int>>(emptyList())
+    val searchResults: StateFlow<List<Int>> = _searchResults
+
+    private val _currentSearchIndex = MutableStateFlow(-1)
+    val currentSearchIndex: StateFlow<Int> = _currentSearchIndex
+
+    private var isSearchMode = false
+
+    fun setSearchQuery(query: String) {
+        _searchQuery.value = query
+        if (query.isNotBlank()) {
+            performSearch(query)
+        } else {
+            _searchResults.value = emptyList()
+            _currentSearchIndex.value = -1
+        }
+    }
+
+    private fun performSearch(query: String) {
+        viewModelScope.launch(Dispatchers.Default) {
+            val session = terminalSession ?: return@launch
+            val emulator = session.emulator ?: return@launch
+            val results = mutableListOf<Int>()
+
+            val rows = emulator.mRows
+            val cols = emulator.mColumns
+
+            for (row in 0 until rows) {
+                val line = StringBuilder()
+                for (col in 0 until cols) {
+                    val char = emulator.getScreen().getSelectedText(row, col, row, col + 1)
+                    if (char != null && char.isNotEmpty()) {
+                        line.append(char)
+                    }
+                }
+                val lineStr = line.toString()
+                var index = lineStr.indexOf(query, ignoreCase = true)
+                while (index != -1) {
+                    results.add(row)
+                    index = lineStr.indexOf(query, index + 1, ignoreCase = true)
+                }
+            }
+
+            _searchResults.value = results
+            _currentSearchIndex.value = if (results.isNotEmpty()) 0 else -1
+        }
+    }
+
+    fun nextSearchResult() {
+        val results = _searchResults.value
+        if (results.isEmpty()) return
+        val nextIndex = (_currentSearchIndex.value + 1) % results.size
+        _currentSearchIndex.value = nextIndex
+    }
+
+    fun previousSearchResult() {
+        val results = _searchResults.value
+        if (results.isEmpty()) return
+        val prevIndex = if (_currentSearchIndex.value <= 0) results.size - 1 else _currentSearchIndex.value - 1
+        _currentSearchIndex.value = prevIndex
+    }
+
+    fun toggleSearchMode() {
+        isSearchMode = !isSearchMode
+        if (!isSearchMode) {
+            _searchQuery.value = ""
+            _searchResults.value = emptyList()
+            _currentSearchIndex.value = -1
+        }
+    }
+
+    fun isSearchMode(): Boolean = isSearchMode
 
     fun adjustFontSize(delta: Int) {
         val newSize = (fontSize + delta).coerceIn(8, 32)
@@ -68,17 +164,23 @@ class TerminalViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun setServerId(id: String) {
-        if (serverId != null) return
+        if (serverId == id) return
+        if (serverId != null) {
+            disconnect()
+        }
         serverId = id
+        reconnectAttempts = 0
+        reconnectJob?.cancel()
+        reconnectJob = null
+        _uiState.value = TerminalUiState.Connecting
     }
 
     fun onSessionReady(session: TerminalSession) {
-        if (terminalSession != null) return
         terminalSession = session
-        viewModelScope.launch { connectSsh() }
+        viewModelScope.launch { verifyAndConnect() }
     }
 
-    private suspend fun connectSsh() {
+    private suspend fun verifyAndConnect() {
         val id = serverId ?: run {
             _uiState.value = TerminalUiState.Error("Server not found.")
             return
@@ -88,6 +190,65 @@ class TerminalViewModel(app: Application) : AndroidViewModel(app) {
             _uiState.value = TerminalUiState.Error("Server was deleted or not found.")
             return
         }
+
+        // Check host key
+        _uiState.value = TerminalUiState.Connecting
+        val verification = withContext(Dispatchers.IO) {
+            sshManager.verifyHostKey(server.host, server.port)
+        }
+
+        when (verification) {
+            is HostKeyVerificationResult.Trusted -> {
+                connectSsh(server)
+            }
+            is HostKeyVerificationResult.NewHost -> {
+                if (verification.fingerprint.isBlank()) {
+                    // Fingerprint alınamadı, doğrudan bağlan
+                    connectSsh(server)
+                } else {
+                    _uiState.value = TerminalUiState.VerifyHostKey(
+                        host = server.host,
+                        port = server.port,
+                        fingerprint = verification.fingerprint,
+                        isChanged = false
+                    )
+                }
+            }
+            is HostKeyVerificationResult.Changed -> {
+                _uiState.value = TerminalUiState.VerifyHostKey(
+                    host = server.host,
+                    port = server.port,
+                    fingerprint = verification.actual,
+                    isChanged = true,
+                    expectedFingerprint = verification.expected
+                )
+            }
+        }
+    }
+
+    fun trustHostAndConnect(host: String, port: Int, fingerprint: String) {
+        viewModelScope.launch {
+            withContext(Dispatchers.IO) {
+                sshManager.trustHost(host, port, fingerprint)
+            }
+            val id = serverId ?: return@launch
+            val server = withContext(Dispatchers.IO) { serverStore.get(id) } ?: return@launch
+            connectSsh(server)
+        }
+    }
+
+    fun trustHostAndReconnect(host: String, port: Int, fingerprint: String) {
+        viewModelScope.launch {
+            withContext(Dispatchers.IO) {
+                sshManager.trustHost(host, port, fingerprint)
+            }
+            val id = serverId ?: return@launch
+            val server = withContext(Dispatchers.IO) { serverStore.get(id) } ?: return@launch
+            connectSsh(server)
+        }
+    }
+
+    private suspend fun connectSsh(server: Server) {
         try {
             _uiState.value = TerminalUiState.Connecting
             val streams = sshManager.connect(server, currentCols, currentRows)
@@ -115,12 +276,66 @@ class TerminalViewModel(app: Application) : AndroidViewModel(app) {
                 // channel closed
             } finally {
                 withContext(Dispatchers.Main) {
-                    if (_uiState.value !is TerminalUiState.Error) {
-                        _uiState.value = TerminalUiState.Disconnected
+                    if (_uiState.value !is TerminalUiState.Error && _uiState.value !is TerminalUiState.Disconnected) {
+                        attemptReconnect()
                     }
                 }
             }
         }
+    }
+
+    private fun attemptReconnect() {
+        if (reconnectAttempts >= maxReconnectAttempts) {
+            _uiState.value = TerminalUiState.Error("Connection lost. Max reconnection attempts reached.")
+            return
+        }
+
+        reconnectAttempts++
+        _uiState.value = TerminalUiState.Reconnecting
+
+        val delayMs = (1000L * reconnectAttempts).coerceAtMost(30000L)
+
+        reconnectJob = viewModelScope.launch {
+            delay(delayMs)
+            if (!isActive) return@launch
+
+            val id = serverId ?: return@launch
+            val server = withContext(Dispatchers.IO) { serverStore.get(id) } ?: return@launch
+
+            // Re-verify host key if needed
+            val verification = withContext(Dispatchers.IO) {
+                sshManager.verifyHostKey(server.host, server.port)
+            }
+
+            when (verification) {
+                is HostKeyVerificationResult.Trusted -> {
+                    connectSsh(server)
+                }
+                is HostKeyVerificationResult.NewHost -> {
+                    _uiState.value = TerminalUiState.VerifyHostKey(
+                        host = server.host,
+                        port = server.port,
+                        fingerprint = verification.fingerprint,
+                        isChanged = false
+                    )
+                }
+                is HostKeyVerificationResult.Changed -> {
+                    _uiState.value = TerminalUiState.VerifyHostKey(
+                        host = server.host,
+                        port = server.port,
+                        fingerprint = verification.actual,
+                        isChanged = true,
+                        expectedFingerprint = verification.expected
+                    )
+                }
+            }
+        }
+    }
+
+    fun cancelReconnect() {
+        reconnectJob?.cancel()
+        reconnectJob = null
+        _uiState.value = TerminalUiState.Disconnected
     }
 
     fun writeToSsh(data: ByteArray) {
@@ -135,10 +350,20 @@ class TerminalViewModel(app: Application) : AndroidViewModel(app) {
 
     fun disconnect() {
         readJob?.cancel()
+        readJob = null
+        reconnectJob?.cancel()
+        reconnectJob = null
+        reconnectAttempts = 0
         val streams = sshStreams
         sshStreams      = null
         terminalView    = null
         terminalSession = null
+        serverId        = null
+        _searchQuery.value = ""
+        _searchResults.value = emptyList()
+        _currentSearchIndex.value = -1
+        isSearchMode = false
+        _uiState.value  = TerminalUiState.Disconnected
         viewModelScope.launch(Dispatchers.IO) {
             if (streams != null) sshManager.disconnect()
         }
@@ -146,6 +371,10 @@ class TerminalViewModel(app: Application) : AndroidViewModel(app) {
 
     override fun onCleared() {
         super.onCleared()
+        disconnect()
+    }
+
+    fun clearState() {
         disconnect()
     }
 }

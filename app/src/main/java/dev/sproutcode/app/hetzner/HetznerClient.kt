@@ -143,7 +143,7 @@ object HetznerClient {
     private fun get(url: String, token: String): String {
         val conn = (URL(url).openConnection() as HttpURLConnection).apply {
             connectTimeout = 10_000
-            readTimeout    = 15_000
+            readTimeout    = 30_000
             requestMethod  = "GET"
             setRequestProperty("Authorization", "Bearer $token")
             setRequestProperty("Accept", "application/json")
@@ -166,7 +166,7 @@ object HetznerClient {
     private fun post(url: String, token: String, jsonBody: String): String {
         val conn = (URL(url).openConnection() as HttpURLConnection).apply {
             connectTimeout = 10_000
-            readTimeout    = 30_000
+            readTimeout    = 120_000
             requestMethod  = "POST"
             setRequestProperty("Authorization",  "Bearer $token")
             setRequestProperty("Content-Type",   "application/json")

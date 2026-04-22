@@ -2,7 +2,10 @@ package dev.sproutcode.app.ui.servercreate
 
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
+import androidx.lifecycle.LifecycleOwner
+import androidx.lifecycle.Observer
 import androidx.lifecycle.viewModelScope
+import androidx.work.WorkInfo
 import dev.sproutcode.app.data.HetznerConfigStore
 import dev.sproutcode.app.data.Server
 import dev.sproutcode.app.data.ServerStore
@@ -48,7 +51,78 @@ class ServerCreateViewModel(app: Application) : AndroidViewModel(app) {
     private val _uiState = MutableStateFlow(ServerCreateUiState())
     val uiState: StateFlow<ServerCreateUiState> = _uiState
 
-    init { loadDefaultsAndOptions() }
+    private var workObserver: Observer<List<WorkInfo>>? = null
+    private var creationStartedThisSession: Boolean = false
+
+    init { 
+        // Ekran her açıldığında state'i sıfırla
+        _uiState.value = ServerCreateUiState()
+        loadDefaultsAndOptions()
+    }
+    
+    fun observeWorkProgress(lifecycleOwner: LifecycleOwner) {
+        removeWorkObserver()
+        
+        val workManager = androidx.work.WorkManager.getInstance(getApplication())
+        val observer = Observer<List<WorkInfo>> { workInfos ->
+            workInfos?.firstOrNull()?.let { workInfo ->
+                if (!creationStartedThisSession) return@let
+                when (workInfo.state) {
+                    WorkInfo.State.RUNNING -> {
+                        val progress = workInfo.progress.getString("progress") ?: "Creating server..."
+                        _uiState.value = _uiState.value.copy(
+                            isCreating = true,
+                            progress = progress
+                        )
+                    }
+                    WorkInfo.State.SUCCEEDED -> {
+                        val serverId = workInfo.outputData.getString("server_id")
+                        _uiState.value = _uiState.value.copy(
+                            isCreating = false,
+                            progress = "Ready!",
+                            createdServerId = serverId
+                        )
+                    }
+                    WorkInfo.State.FAILED -> {
+                        val error = workInfo.outputData.getString("error") ?: "Creation failed"
+                        _uiState.value = _uiState.value.copy(
+                            isCreating = false,
+                            progress = "",
+                            createError = error
+                        )
+                    }
+                    else -> {}
+                }
+            }
+        }
+        workObserver = observer
+        workManager.getWorkInfosForUniqueWorkLiveData(dev.sproutcode.app.worker.ServerCreationWorker.WORK_NAME)
+            .observe(lifecycleOwner, observer)
+    }
+    
+    fun removeWorkObserver() {
+        workObserver?.let {
+            val workManager = androidx.work.WorkManager.getInstance(getApplication())
+            workManager.getWorkInfosForUniqueWorkLiveData(dev.sproutcode.app.worker.ServerCreationWorker.WORK_NAME)
+                .removeObserver(it)
+            workObserver = null
+        }
+    }
+    
+    override fun onCleared() {
+        super.onCleared()
+        removeWorkObserver()
+    }
+    
+    fun resetCreatedServerId() {
+        _uiState.value = _uiState.value.copy(createdServerId = null)
+    }
+
+    fun resetState() {
+        creationStartedThisSession = false
+        _uiState.value = ServerCreateUiState()
+        loadDefaultsAndOptions()
+    }
 
     private fun loadDefaultsAndOptions() {
         viewModelScope.launch {
@@ -95,86 +169,39 @@ class ServerCreateViewModel(app: Application) : AndroidViewModel(app) {
     fun onImageChange(v: String)         { _uiState.value = _uiState.value.copy(image         = v) }
     fun onGithubRepoUrlChange(v: String) { _uiState.value = _uiState.value.copy(githubRepoUrl = v) }
 
-    fun create() {
+    fun create(sendNotification: (title: String, message: String, serverId: String?) -> Unit = { _, _, _ -> }) {
         val s = _uiState.value
         if (s.location.isBlank() || s.serverType.isBlank() || s.image.isBlank()) {
             _uiState.value = s.copy(createError = "Location, type and image are required.")
             return
         }
-        viewModelScope.launch {
-            val cfg = withContext(Dispatchers.IO) { hetznerStore.load() }
-            val token = cfg.apiToken
-            if (token.isBlank()) {
-                _uiState.value = _uiState.value.copy(tokenMissing = true)
-                return@launch
-            }
-            try {
-                progress("Uploading SSH key to Hetzner...", true)
-                val keyId = HetznerClient.ensureSshKey(token, sshKeyStore.publicKey())
+        
+        // Start WorkManager for background execution
+        val workRequest = androidx.work.OneTimeWorkRequestBuilder<dev.sproutcode.app.worker.ServerCreationWorker>()
+            .setInputData(androidx.work.workDataOf(
+                dev.sproutcode.app.worker.ServerCreationWorker.KEY_SERVER_NAME to s.name,
+                dev.sproutcode.app.worker.ServerCreationWorker.KEY_LOCATION to s.location,
+                dev.sproutcode.app.worker.ServerCreationWorker.KEY_SERVER_TYPE to s.serverType,
+                dev.sproutcode.app.worker.ServerCreationWorker.KEY_IMAGE to s.image,
+                dev.sproutcode.app.worker.ServerCreationWorker.KEY_GITHUB_REPO to s.githubRepoUrl
+            ))
+            .build()
+        
+        androidx.work.WorkManager.getInstance(getApplication())
+            .enqueueUniqueWork(
+                dev.sproutcode.app.worker.ServerCreationWorker.WORK_NAME,
+                androidx.work.ExistingWorkPolicy.REPLACE,
+                workRequest
+            )
 
-                progress("Creating server...", true)
-                val name = s.name.trim().ifBlank { "sproutcode-${System.currentTimeMillis() / 1000}" }
-                val userData = s.githubRepoUrl.trim().takeIf { it.isNotBlank() }
-                    ?.let { buildUserData(it, cfg.githubToken) }
-                val created = HetznerClient.createServer(
-                    token,
-                    CreateServerRequest(
-                        name       = name,
-                        serverType = s.serverType,
-                        location   = s.location,
-                        image      = s.image,
-                        sshKeyIds  = listOf(keyId),
-                        userData   = userData
-                    )
-                )
-
-                progress("Starting VM...", true)
-                val ready = waitForRunning(token, created.id) { elapsed ->
-                    progress("Starting VM... (${elapsed}s)", true)
-                }
-                val host = ready.ipv4 ?: throw Exception("No IP assigned to server.")
-
-                val tcpOk = SshProbe.waitForTcp(host, 22, maxAttempts = 30) { attempt ->
-                    progress("Waiting for SSH port... (${attempt * 2}s)", true)
-                }
-                if (!tcpOk) throw Exception("Port 22 did not open (60s timeout).")
-
-                val authOk = SshProbe.waitForSshAuth(
-                    host       = host,
-                    port       = 22,
-                    username   = "root",
-                    privateKey = sshKeyStore.privateKey(),
-                    maxAttempts = 20
-                ) { attempt ->
-                    progress("Waiting for key injection... (${attempt * 3}s)", true)
-                }
-                if (!authOk) throw Exception("SSH key auth failed. Cloud-init error possible.")
-
-                val saved = Server(
-                    name       = ready.name,
-                    host       = ready.ipv4,
-                    port       = 22,
-                    username   = "root",
-                    password   = "",
-                    hetznerId  = ready.id,
-                    useKeyAuth = true
-                )
-                withContext(Dispatchers.IO) { serverStore.save(saved) }
-
-                _uiState.value = _uiState.value.copy(
-                    isCreating      = false,
-                    progress        = "Ready!",
-                    createdServerId = saved.id
-                )
-            } catch (e: Exception) {
-                _uiState.value = _uiState.value.copy(
-                    isCreating  = false,
-                    progress    = "",
-                    createError = e.message ?: "Creation failed."
-                )
-            }
-        }
+        creationStartedThisSession = true
+        _uiState.value = _uiState.value.copy(
+            isCreating = true,
+            progress = "Server creation started in background..."
+        )
     }
+    
+
 
     private fun buildUserData(repoUrl: String, token: String): String {
         val normalized = when {
